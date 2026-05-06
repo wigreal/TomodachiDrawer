@@ -4,17 +4,19 @@
 #include "hardware/pio.h"
 #include "ws2812.pio.h"
 
-// Waveshare RP2040 Zero onboard NeoPixel
 #define NEOPIXEL_PIN 16
 #define NEOPIXEL_PIO pio0
 #define NEOPIXEL_SM  0
 
-#define NEOPIXEL_BRIGHT 127 // Its surprisingly bright lol
-#define RAINBOW_DIVISOR 4 // because again, its really bright
+#define NEOPIXEL_BRIGHT 127
+#define RAINBOW_DIVISOR 4
 
-// We store the instructions in the top half of our flash.
-// Reality is we could probably do 1.75MB since this program is teeny tiny but 1MB seems to be enough.
 #define FLASH_TARGET_OFFSET (1 * 1024 * 1024)
+
+// === 时序调整：原版 25ms，改为 40ms ===
+#define TAP_HOLD_MS    40
+#define TAP_RELEASE_MS 40
+// =====================================
 
 typedef uint16_t gamepad_button_t;
 
@@ -49,43 +51,36 @@ typedef uint16_t gamepad_button_t;
 #define STICK_RY     6
 #define STICK_CENTER 128
 
-// Report layout: [Btn1, Btn2, DPad, LX, LY, RX, RY, Padding]
 static uint8_t current_report[8] = {0x00, 0x00, 0x08, 128, 128, 128, 128, 0x00};
 
 const uint8_t *flash_contents = (const uint8_t *)(XIP_BASE + FLASH_TARGET_OFFSET);
 
-// mapping C#'s Button enum (A=0, B=1, X=2, Y=3, ...) to report bits
 const gamepad_button_t button_map[] = {
     BTN_A, BTN_B, BTN_X, BTN_Y, BTN_L, BTN_R,
     BTN_ZL, BTN_ZR, BTN_MINUS, BTN_PLUS, BTN_LCLICK,
     BTN_RCLICK, BTN_HOME, BTN_CAPTURE
 };
 
-// C#'s Stick enum: LX=0, LY=1, RX=2, RY=3
 const uint8_t stick_axis_map[] = {
     STICK_LX, STICK_LY, STICK_RX, STICK_RY
 };
 
-
-// opcodes are from FileControllerSink.cs, same for version.
 #define TDLD_VERSION 0x03
 
-// All opcodes are stored in the upper nibble (4 bits)
-#define OPCODE_INVALID          0x0 // "invalid" to avoid boring 0x00 files in hex editor originally, repurposed for EOF.
-#define OPCODE_PRESS_BUTTON     0x1 // Press a button down. lower nibble is input, through button_map
-#define OPCODE_RELEASE_BUTTON   0x2 // Release a button. lower nibble is input.
-#define OPCODE_PRESS_DPAD       0x3 // Press the DPAD (or more correctly, set its state). Lower nibble is direction.
-#define OPCODE_RELEASE_DPAD     0x4 // "Releases" (sets to DPAD_NEUTRAL)
-#define OPCODE_RELEASE_ALL      0x5 // Reset everything. Unused by my implementation
-#define OPCODE_DELAY            0x6 // 2 bytes. Lower nibble is upper 4 bits, second byte is another 8 bits for 12 bits. Max 4095ms delay. Can be repeated
-#define OPCODE_SET_STICK        0x7 // Set stick. Unused ATM. lower nibble is axis, second byte is value
-#define OPCODE_TAP_BUTTON       0x8 // 1 byte "tap" shortcut, Press -> 25ms delay -> Release -> 25ms delay. Used a LOT
-#define OPCODE_TAP_DPAD         0x9 // Same as above but for DPad
+#define OPCODE_INVALID          0x0
+#define OPCODE_PRESS_BUTTON     0x1
+#define OPCODE_RELEASE_BUTTON   0x2
+#define OPCODE_PRESS_DPAD       0x3
+#define OPCODE_RELEASE_DPAD     0x4
+#define OPCODE_RELEASE_ALL      0x5
+#define OPCODE_DELAY            0x6
+#define OPCODE_SET_STICK        0x7
+#define OPCODE_TAP_BUTTON       0x8
+#define OPCODE_TAP_DPAD         0x9
 
-#define OPCODE_REPEAT_LAST_1    0xE // Repeat the last 1 byte record the number of times in the bottom nibble (0-15)
-#define OPCODE_REPEAT_LAST_2    0xF // Repeat the last 1 byte record but with 12 bits (0-4096)
+#define OPCODE_REPEAT_LAST_1    0xE
+#define OPCODE_REPEAT_LAST_2    0xF
 
-// hid helpers. avoids repeated error-prone bit shite.
 static inline void hid_press(gamepad_button_t btn) {
     current_report[btn >> 8] |= (btn & 0xFF);
 }
@@ -113,13 +108,11 @@ static inline void hid_set_stick(uint8_t axis, uint8_t value) {
     current_report[axis] = value;
 }
 
-// neopixel stuff.
 static void neopixel_init(void) {
     uint offset = pio_add_program(NEOPIXEL_PIO, &ws2812_program);
     ws2812_program_init(NEOPIXEL_PIO, NEOPIXEL_SM, offset, NEOPIXEL_PIN, 800000, false);
 }
 
-// "blocking" is interesting but doesnt seem to cause any trouble...
 static void neopixel_set_rgb(uint8_t r, uint8_t g, uint8_t b) {
     uint32_t grb = ((uint32_t)g << 24) | ((uint32_t)r << 16) | ((uint32_t)b << 8);
     pio_sm_put_blocking(NEOPIXEL_PIO, NEOPIXEL_SM, grb);
@@ -135,9 +128,6 @@ static void boringpixel_set(bool on)
     gpio_put(25, on);
 }
 
-// delays precisely but while running tud_task so the usb is active.
-// this is the alternative to running a multicore architecture which i tried
-// and let me tell you, it was not a source of much fun.
 static void delay_ms_usb(uint32_t ms) {
     absolute_time_t end = make_timeout_time_ms(ms);
     while (!time_reached(end)) {
@@ -145,8 +135,6 @@ static void delay_ms_usb(uint32_t ms) {
     }
 }
 
-// send the report to the connected device, actually sends the data.
-// this is called by push_report and the countdown to send the neutral state.
 static void send_report_raw(void) {
     while (!tud_hid_ready()) {
         tud_task();
@@ -154,10 +142,8 @@ static void send_report_raw(void) {
     tud_hid_report(0, current_report, sizeof(current_report));
 }
 
-// send report and update neopixel. used during actual playback.
 static void push_report(void) {
     send_report_raw();
-    // Mirror the Python firmware: green while any button is held, dim-white when idle
     if (current_report[0] != 0 || current_report[1] != 0) {
         neopixel_set_rgb(0, NEOPIXEL_BRIGHT, 0);
         boringpixel_set(true);
@@ -167,8 +153,6 @@ static void push_report(void) {
     }
 }
 
-// error thing. flashes red.
-// todo: make this more human friendly (flash different colours? or patterns?)
 static void error_flash(int interval_ms) {
     while (true) {
         neopixel_set_rgb(NEOPIXEL_BRIGHT, 0, 0);
@@ -180,7 +164,6 @@ static void error_flash(int interval_ms) {
     }
 }
 
-// new and improved rainbow from like, the hsv thing. but no s,v for simplicity.
 void get_good_rainbow(uint8_t hue, uint8_t *r, uint8_t *g, uint8_t *b) {
     if (hue < 85) {
         *r = 255 - hue * 3;
@@ -199,7 +182,6 @@ void get_good_rainbow(uint8_t hue, uint8_t *r, uint8_t *g, uint8_t *b) {
     }
 }
 
-// worlds worst "rainbow
 static void done_rainbow(void) {
     uint8_t hue = 0;
     uint8_t r, g, b;
@@ -212,8 +194,6 @@ static void done_rainbow(void) {
     }
 }
 
-// single byte opcodes are in their own function because
-// they are eligible for repeats so this avoids duplicated code.
 static void run_single_byte_opcode(uint8_t record) {
     uint8_t opcode = record >> 4;
     uint8_t nibble = record & 0xF;
@@ -238,46 +218,38 @@ static void run_single_byte_opcode(uint8_t record) {
             hid_release_all();
             push_report();
             break;
-        // Tap: press -> 25ms -> release -> 25ms
-        // This exists for storage saving, because the alternative is 4 records, which would be 6 bytes (1+2+1+2)
         case OPCODE_TAP_BUTTON:
             hid_press(button_map[nibble]);
             push_report();
-            delay_ms_usb(25);
+            delay_ms_usb(TAP_HOLD_MS);
             hid_release(button_map[nibble]);
             push_report();
-            delay_ms_usb(25);
+            delay_ms_usb(TAP_RELEASE_MS);
             break;
         case OPCODE_TAP_DPAD:
             hid_set_dpad(nibble);
             push_report();
-            delay_ms_usb(25);
+            delay_ms_usb(TAP_HOLD_MS);
             hid_set_dpad(DPAD_NEUTRAL);
             push_report();
-            delay_ms_usb(25);
+            delay_ms_usb(TAP_RELEASE_MS);
             break;
         default:
-            error_flash(5000); // corruption?
+            error_flash(5000);
             break;
     }
 }
 
-// ACTUAL ENTRYPOINT
 int main(void) {
     board_init();
     tusb_init();
     neopixel_init();
     boringpixel_init();
 
-    // yapp until they hear
     while (!tud_mounted()) {
         tud_task();
     }
 
-    // 3 flash countdown, this is mostly just for there to be some
-    // time for the switch to acknowledge things. On that note: we send empty neutral inputs here
-    // so the switch expects us when we start playing back.
-    // Otherwise it seemed to be off by one.
     for (int i = 0; i < 3; i++) {
         neopixel_set_rgb(NEOPIXEL_BRIGHT, NEOPIXEL_BRIGHT, 0);
         send_report_raw();
@@ -289,18 +261,17 @@ int main(void) {
 
     const uint8_t *ptr = flash_contents;
 
-    // Validate TDLD magic ("TomoDachi Life Drawer")
     if (ptr[0] != 'T' || ptr[1] != 'D' || ptr[2] != 'L' || ptr[3] != 'D') {
-        error_flash(250); // fast blink = bad magic. todo: better error reporting lol
+        error_flash(250);
         return 0;
     }
     if (ptr[4] != TDLD_VERSION) {
-        error_flash(1000); // slow blink = wrong version
+        error_flash(1000);
         return 0;
     }
-    ptr += 6; // 4-byte magic + 1-byte version + 1-byte padding
+    ptr += 6;
 
-    uint8_t last_1byte_record = 0; // for Repeat opcodes.
+    uint8_t last_1byte_record = 0;
     bool working = true;
     while (working) {
         tud_task();
@@ -312,7 +283,7 @@ int main(void) {
             case OPCODE_INVALID:
                 working = false;
                 break;
-            case OPCODE_DELAY: { // 2 byte record. 4 bits from record, 8 from second byte
+            case OPCODE_DELAY: {
                 uint8_t data     = *ptr++;
                 uint16_t delayMs = (nibble << 8) | data;
                 delay_ms_usb(delayMs);
@@ -324,7 +295,7 @@ int main(void) {
                 push_report();
                 break;
             }
-            case OPCODE_REPEAT_LAST_1: { // 1 byte repeat.
+            case OPCODE_REPEAT_LAST_1: {
                 uint8_t count = nibble;
                 for (int i = 0; i < count; i++) {
                     run_single_byte_opcode(last_1byte_record);
@@ -350,6 +321,5 @@ int main(void) {
     return 0;
 }
 
-// no-op required callbacks >:(
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t id, hid_report_type_t type, uint8_t *buf, uint16_t len) { return 0; }
 void     tud_hid_set_report_cb(uint8_t itf, uint8_t id, hid_report_type_t type, uint8_t const *buf, uint16_t len) {}
