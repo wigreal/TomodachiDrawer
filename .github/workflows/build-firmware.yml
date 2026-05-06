@@ -1,0 +1,34 @@
+name: Build Firmware
+
+on:
+  push:
+    paths:
+      - 'TomodachiDrawer.Firmware/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pico SDK and toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib build-essential python3
+          git clone --depth 1 --branch master https://github.com/raspberrypi/pico-sdk /tmp/pico-sdk
+          cd /tmp/pico-sdk && git submodule update --init --depth 1
+
+      - name: Build firmware
+        run: |
+          cd TomodachiDrawer.Firmware
+          mkdir build && cd build
+          cmake .. -DPICO_SDK_PATH=/tmp/pico-sdk -G "Unix Makefiles"
+          make -j$(nproc)
+
+      - name: Upload UF2
+        uses: actions/upload-artifact@v4
+        with:
+          name: TomodachiDrawer.Firmware_40ms
+          path: TomodachiDrawer.Firmware/build/TomodachiDrawer.Firmware.uf2
