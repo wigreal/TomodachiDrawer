@@ -13,10 +13,10 @@
 
 #define FLASH_TARGET_OFFSET (1 * 1024 * 1024)
 
-// === 时序调整：原版 25ms，改为 40ms ===
-#define TAP_HOLD_MS    40
-#define TAP_RELEASE_MS 40
-// =====================================
+// === 恢复原速 25ms，靠持续发送来保证可靠性 ===
+#define TAP_HOLD_MS    25
+#define TAP_RELEASE_MS 25
+// =============================================
 
 typedef uint16_t gamepad_button_t;
 
@@ -128,12 +128,19 @@ static void boringpixel_set(bool on)
     gpio_put(25, on);
 }
 
+// ========== 核心修改：等待期间持续重发当前状态 ==========
+// 原版只发1次就沉默，Switch漏掉就永远丢了
+// 现在每次Switch来轮询都能拿到当前状态，不会丢
 static void delay_ms_usb(uint32_t ms) {
     absolute_time_t end = make_timeout_time_ms(ms);
     while (!time_reached(end)) {
         tud_task();
+        if (tud_hid_ready()) {
+            tud_hid_report(0, current_report, sizeof(current_report));
+        }
     }
 }
+// ======================================================
 
 static void send_report_raw(void) {
     while (!tud_hid_ready()) {
