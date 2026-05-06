@@ -13,10 +13,12 @@
 
 #define FLASH_TARGET_OFFSET (1 * 1024 * 1024)
 
-// === 恢复原速 25ms，靠持续发送来保证可靠性 ===
-#define TAP_HOLD_MS    25
-#define TAP_RELEASE_MS 25
-// =============================================
+// === 核心参数：按 Switch 实际轮询次数计数，不按时间 ===
+// bInterval=1ms，所以每次轮询约1ms
+// 25次轮询 ≈ 25ms，和原版速度一样，但完全确定性
+#define TAP_HOLD_POLLS    25
+#define TAP_RELEASE_POLLS 25
+// =====================================================
 
 typedef uint16_t gamepad_button_t;
 
@@ -128,9 +130,20 @@ static void boringpixel_set(bool on)
     gpio_put(25, on);
 }
 
-// ========== 核心修改：等待期间持续重发当前状态 ==========
-// 原版只发1次就沉默，Switch漏掉就永远丢了
-// 现在每次Switch来轮询都能拿到当前状态，不会丢
+// ========== 核心：按轮询次数等待，每次都发送当前状态 ==========
+// 发送 count 次报告，每次等 Switch 确认收到再发下一次
+// 这样方向键被 Switch 看到的次数是精确的，不受时钟抖动影响
+static void wait_reports(uint16_t count) {
+    for (uint16_t i = 0; i < count; i++) {
+        while (!tud_hid_ready()) {
+            tud_task();
+        }
+        tud_hid_report(0, current_report, sizeof(current_report));
+    }
+}
+// ==============================================================
+
+// 长延迟（OPCODE_DELAY 用）：按时间等，期间持续发送
 static void delay_ms_usb(uint32_t ms) {
     absolute_time_t end = make_timeout_time_ms(ms);
     while (!time_reached(end)) {
@@ -140,7 +153,6 @@ static void delay_ms_usb(uint32_t ms) {
         }
     }
 }
-// ======================================================
 
 static void send_report_raw(void) {
     while (!tud_hid_ready()) {
@@ -227,19 +239,15 @@ static void run_single_byte_opcode(uint8_t record) {
             break;
         case OPCODE_TAP_BUTTON:
             hid_press(button_map[nibble]);
-            push_report();
-            delay_ms_usb(TAP_HOLD_MS);
+            wait_reports(TAP_HOLD_POLLS);
             hid_release(button_map[nibble]);
-            push_report();
-            delay_ms_usb(TAP_RELEASE_MS);
+            wait_reports(TAP_RELEASE_POLLS);
             break;
         case OPCODE_TAP_DPAD:
             hid_set_dpad(nibble);
-            push_report();
-            delay_ms_usb(TAP_HOLD_MS);
+            wait_reports(TAP_HOLD_POLLS);
             hid_set_dpad(DPAD_NEUTRAL);
-            push_report();
-            delay_ms_usb(TAP_RELEASE_MS);
+            wait_reports(TAP_RELEASE_POLLS);
             break;
         default:
             error_flash(5000);
