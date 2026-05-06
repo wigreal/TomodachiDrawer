@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        timing: [30, 35, 40, 45, 50, 60, 80]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,6 +23,14 @@ jobs:
           git clone --depth 1 --branch master https://github.com/raspberrypi/pico-sdk /tmp/pico-sdk
           cd /tmp/pico-sdk && git submodule update --init --depth 1
 
+      - name: Set timing to ${{ matrix.timing }}ms
+        run: |
+          cd TomodachiDrawer.Firmware
+          sed -i 's/#define TAP_HOLD_MS    40/#define TAP_HOLD_MS    ${{ matrix.timing }}/' TomodachiDrawer.Firmware.c
+          sed -i 's/#define TAP_RELEASE_MS 40/#define TAP_RELEASE_MS ${{ matrix.timing }}/' TomodachiDrawer.Firmware.c
+          echo "--- 确认修改结果 ---"
+          grep "TAP_HOLD_MS\|TAP_RELEASE_MS" TomodachiDrawer.Firmware.c
+
       - name: Build firmware
         run: |
           cd TomodachiDrawer.Firmware
@@ -30,5 +41,5 @@ jobs:
       - name: Upload UF2
         uses: actions/upload-artifact@v4
         with:
-          name: TomodachiDrawer.Firmware_40ms
+          name: Firmware_${{ matrix.timing }}ms
           path: TomodachiDrawer.Firmware/build/TomodachiDrawer.Firmware.uf2
