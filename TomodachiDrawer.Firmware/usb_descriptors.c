@@ -19,7 +19,7 @@ uint8_t const desc_hid_report[] = {
 
 uint8_t const desc_device[] = {
     18, TUSB_DESC_DEVICE, 0x00, 0x02,
-    0x00, 0x00, 0x00,               // Class/SubClass/Protocol: defined at interface level
+    0x00, 0x00, 0x00,
     CFG_TUD_ENDPOINT0_SIZE,
     (uint8_t)(USB_VID & 0xff), (uint8_t)(USB_VID >> 8),
     (uint8_t)(USB_PID & 0xff), (uint8_t)(USB_PID >> 8),
@@ -27,17 +27,16 @@ uint8_t const desc_device[] = {
 };
 
 uint8_t const desc_configuration[] = {
-    // 1 interface (HID only)
     TUD_CONFIG_DESCRIPTOR(1, 1, 0, (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN), TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 500),
-    TUD_HID_DESCRIPTOR(0, 1, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report), EPNUM_HID, 64, 8)
+    TUD_HID_DESCRIPTOR(0, 1, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report), EPNUM_HID, 64, 1)
 };
 
 char const* string_desc_arr[] = {
-    (const char[]) { 0x09, 0x04 }, // 0: English
-    "HORI CO., LTD.",              // 1: Manufacturer
-    "POKKEN CONTROLLER",           // 2: Product
-    "123456",                      // 3: Serial
-    "Tomodachi Gamepad",           // 4: HID Interface Name
+    (const char[]) { 0x09, 0x04 },
+    "HORI CO., LTD.",
+    "POKKEN CONTROLLER",
+    "123456",
+    "Tomodachi Gamepad",
 };
 
 uint8_t const * tud_descriptor_device_cb(void) { return desc_device; }
