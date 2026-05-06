@@ -16,8 +16,8 @@
 // === 核心参数：按 Switch 实际轮询次数计数，不按时间 ===
 // bInterval=1ms，所以每次轮询约1ms
 // 25次轮询 ≈ 25ms，和原版速度一样，但完全确定性
-#define TAP_HOLD_POLLS    25
-#define TAP_RELEASE_POLLS 25
+#define TAP_HOLD_POLLS    8
+#define TAP_RELEASE_POLLS 8
 // =====================================================
 
 typedef uint16_t gamepad_button_t;
